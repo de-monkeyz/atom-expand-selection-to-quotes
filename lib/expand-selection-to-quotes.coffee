@@ -15,20 +15,25 @@ class ExpandSelectionToQuotes
 
   constructor: (@editor) ->
     @scopeMatch = /\.quoted\./
-    @cursors = editor.getCursorBufferPositions()
+    @cursors = @editor.getCursorBufferPositions()
     @includeQuotes = atom.config.get 'expand-selection-to-quotes.includeQuotes'
-    @recurrence = 0
+
+    @first = true
 
     for pos, index in @cursors
+      # Scope begins and ends before the character (or quote in this example)
+      # Move cursor one to the left if we are adjacent to a closing quote
+      pos = pos.copy()
+      pos.column -=1 if pos.column > 0 and /'|"/.test @editor.getTextInBufferRange [pos, [pos.row, pos.column+1]]
       [..., scope] = @editor.scopeDescriptorForBufferPosition(pos).scopes
       # Do not process between strings, only inside them
       continue if not @scopeMatch.test scope
-      @addSelection(pos)
+      @addSelection(pos, first)
 
 
-  expandSelection: (position, direction) ->
-
-    range = @editor.displayBuffer.bufferRangeForScopeAtPosition ".string.quoted", position
+  expandSelection: (position, direction = 0) ->
+    try
+      range = @editor.displayBuffer.bufferRangeForScopeAtPosition ".string.quoted", position
 
     return if not range
 
@@ -39,36 +44,43 @@ class ExpandSelectionToQuotes
       check = range.start.copy()
       check.row -= 1
       check.column = @editor.lineTextForBufferRow(check.row).length
-      @addSelection(check, -1)
+      lookBehind = @expandSelection(check, -1)
+      range = new Range(lookBehind.start, range.end) if lookBehind
 
     # Select ran up to end of line (limitation of bufferRangeForScopeAtPosition).
     # Also check the next line
     lastLine = @editor.lineTextForBufferRow(range.end.row)
     totalLines = @editor.getLineCount()
 
-    # console.log "Line length: #{lastLine.length}, Column: #{range.end.column}"
-
     if direction isnt -1 and range.end.column is lastLine.length and range.end.row < totalLines
       check = range.end.copy()
       check.row += 1
       check.column = 0
-      @addSelection(check, 1)
+      lookAhead = @expandSelection(check, 1)
+      range = new Range(range.start, lookAhead.end) if lookAhead
 
 
     return range
 
 
-  addSelection: (position, direction) ->
+  addSelection: (position, first) ->
     @initialScope = @editor.scopeDescriptorForBufferPosition(position).toString()
-    range = @expandSelection(position, direction)
+    range = @expandSelection(position)
 
     # if not @includeQuotes
     #   range.start = range.start.traverse [0, 1]
     #   range.end = range.end.traverse [0, -1]
 
     # Scope is expanded to INCLUDE quotation marks.
-    @editor.addSelectionForBufferRange(range) if range
+    return if not range
 
+    if @first
+      @editor.setSelectedBufferRange(range)
+    else
+      @editor.addSelectionForBufferRange(range)
+
+
+    @first = false
 
 module.exports =
   activate: ->
